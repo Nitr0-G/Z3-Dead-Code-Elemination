@@ -60,14 +60,6 @@ struct x86_ctx {
 	z3::expr* xmm15;
 
 	z3::expr* EShadowStackPTR;
-	//void* ShadowStackPTR;
-	//std::vector<z3::expr> ShadowStack;
-	// 
-	//void* ShadowStackPTR;
-	//z3::array<z3::expr> ShadowStack;
-
-
-	//z3::expr* memory;
 
 	z3::expr* cf;
 	z3::expr* of;
@@ -112,9 +104,6 @@ struct x86_ctx {
 		, xmm15(nullptr)
 
 		, EShadowStackPTR(nullptr)
-		//, ShadowStackPTR(&ShadowStack)
-		//, ShadowStackPTR(nullptr)
-		//, memory(nullptr)
 
 		, of(nullptr)
 		, zf(nullptr)
@@ -292,11 +281,6 @@ void create_initial_state(z3::context& z3c, x86_ctx& ctx)
 	ctx.xmm15 = new z3::expr(z3c.bv_const("init_xmm15", 128));
 
 	ctx.EShadowStackPTR = new z3::expr(z3c.bv_const("ShadowStack", 64));
-	//ctx.ShadowStack.reserve(0x10000);
-	//ctx.ShadowStack.push_back(z3::expr(z3c.bv_const("ShadowStack", 0x10000)));
-
-	//z3::array<z3::expr*> ShadowStack(z3c.bv_const("init_ShadowStack", 0x10000));
-	//ctx.ShadowStackPTR = &ShadowStack;
 
 	ctx.of = new z3::expr(z3c.bool_const("init_of"));
 	ctx.zf = new z3::expr(z3c.bool_const("init_zf"));
@@ -482,14 +466,15 @@ void translate_push(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zy
 {
 	if (ins.info.operand_count == 3)
 	{
-		auto& op1 = ins.operands[0];
+		auto& op1 = ins.operands[0]; auto& op2 = ins.operands[1];
 
 		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
+		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
 		z3::expr** dst = get_val_expr(z3c, new_state, op1);
 
 		*dst = new z3::expr(z3c, e1);
 
-		new_state.rsp = &(*old_state.rsp - 8);
+		new_state.rsp = &(e2 - 8);
 		new_state.EShadowStackPTR = &(**dst);
 	}
 	else
@@ -502,15 +487,16 @@ void translate_pop(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 {
 	if (ins.info.operand_count == 3)
 	{
-		auto& op1 = ins.operands[0];
+		auto& op1 = ins.operands[0]; auto& op2 = ins.operands[1];
 
 		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
+		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
 		z3::expr** dst = get_val_expr(z3c, new_state, op1);
 
 		*dst = new z3::expr(z3c, e1);
 
-		//new_state.rsp = &(*old_state.rsp + 8);
-		//new_state.EShadowStackPTR = &(*new_state.rsp, **dst);
+		new_state.rsp = &(e2 + 8);
+		new_state.EShadowStackPTR = &(**dst);
 	}
 	else
 	{
