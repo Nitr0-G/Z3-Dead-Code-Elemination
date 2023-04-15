@@ -7,7 +7,7 @@
 #include <Zydis/Zydis.h>
 
 //stl
-#include <exception>// stl
+#include <exception>
 #include <iostream>
 #include <fstream>
 #include <cstdint>
