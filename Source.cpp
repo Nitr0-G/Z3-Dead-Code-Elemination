@@ -1,4 +1,12 @@
 #define _CRT_SECURE_NO_WARNINGS
+
+//FrameWorks and Libs
+#include <z3++.h> 
+#include <z3_api.h>
+#include <boost/scoped_array.hpp>
+#include <Zydis/Zydis.h>
+
+//stl
 #include <exception>// stl
 #include <iostream>
 #include <fstream>
@@ -6,11 +14,7 @@
 #include <list>
 #include <string> 
 #include <sstream> 
-#include <Zydis/Zydis.h> // zydis
 #include <vector>
-#include <boost/scoped_array.hpp> // boost
-#include <z3++.h> 
-#include <z3_api.h>
 
 typedef std::list<ZydisDisassembledInstruction_> instruction_optimize_list;
 
@@ -670,39 +674,3 @@ z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op
 	else
 		throw std::exception("bad operand type");
 }
-
-/*
-z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op)
-{
-	if (op.type == ZYDIS_OPERAND_TYPE_REGISTER)
-	{
-		z3::expr** ret;
-
-		switch (op.reg.value)
-		{
-		case ZYDIS_REGISTER_RAX: ret = &state.rax; break;
-		case ZYDIS_REGISTER_RBX: ret = &state.rbx; break;
-		case ZYDIS_REGISTER_RCX: ret = &state.rcx; break;
-		case ZYDIS_REGISTER_RDX: ret = &state.rdx; break;
-		case ZYDIS_REGISTER_RSI: ret = &state.rsi; break;
-		case ZYDIS_REGISTER_RDI: ret = &state.rdi; break;
-		case ZYDIS_REGISTER_RBP: ret = &state.rbp; break;
-		default:
-			throw std::exception("bad register");
-		}
-
-		if (ret)
-			return ret;
-		else
-			throw std::exception("bad state");
-	}
-	else if (op.type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
-	{
-		state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint64_t>(op.imm.value.u), 64)));
-
-		return &state.temp.back();
-	}
-	else
-		throw std::exception("bad operand type");
-}
-*/
