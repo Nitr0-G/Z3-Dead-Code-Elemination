@@ -113,7 +113,7 @@ struct x86_ctx {
 };
 
 
-
+//Prototypes
 Struct_Of_Dissamble_Function  Dissamble(ZyanU64 runtime_address, ZyanUSize offset, std::vector<ZyanU8> data, const ZyanUSize length, Struct_Of_Dissamble_Function SODF);
 
 void eleminate_dead_code(Struct_Of_Dissamble_Function& SODF, const ZyanUSize length);
@@ -139,6 +139,7 @@ void translate_push(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zy
 void translate_pop(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
 
 z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op);
+//Prototypes
 
 int main()
 {
@@ -172,7 +173,7 @@ int main()
 
 	return 0;
 };
-
+//Func for disasm
 Struct_Of_Dissamble_Function Dissamble(ZyanU64 runtime_address, ZyanUSize offset, std::vector<ZyanU8> data, const ZyanUSize length, Struct_Of_Dissamble_Function SODF)
 {
 	while (ZYAN_SUCCESS(ZydisDisassembleIntel(ZYDIS_MACHINE_MODE_LONG_64, runtime_address, &data[0] + offset, length - offset,
@@ -190,6 +191,7 @@ Struct_Of_Dissamble_Function Dissamble(ZyanU64 runtime_address, ZyanUSize offset
 	return (SODF);
 };
 
+//Start of PoC about eleminate_dead_code via Z3 and Zydis
 void eleminate_dead_code(Struct_Of_Dissamble_Function& SODF, const ZyanUSize length)
 {
 	bool eliminated; 
