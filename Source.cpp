@@ -26,7 +26,9 @@ struct Struct_Of_Dissamble_Function {
 
 struct x86_ctx {
 	z3::expr* rax;
+	z3::expr* al;
 	z3::expr* rbx;
+	z3::expr* bl;
 	z3::expr* rcx;
 	z3::expr* rdx;
 	z3::expr* rbp;
@@ -41,6 +43,8 @@ struct x86_ctx {
 	z3::expr* r13;
 	z3::expr* r14;
 	z3::expr* r15;
+
+	z3::expr* rflags;
 
 	z3::expr* xmm0;
 	z3::expr* xmm1;
@@ -60,6 +64,12 @@ struct x86_ctx {
 	z3::expr* xmm15;
 
 	z3::expr* EShadowStackPTR;
+	//void* ShadowStackPTR;
+	//std::vector<z3::expr> ShadowStack;
+	// 
+	//void* ShadowStackPTR;
+	//z3::array<z3::expr> ShadowStack;
+	//z3::expr* memory;
 
 	z3::expr* cf;
 	z3::expr* of;
@@ -70,7 +80,9 @@ struct x86_ctx {
 
 	x86_ctx()
 		: rax(nullptr)
+		, al(nullptr)
 		, rbx(nullptr)
+		, bl(nullptr)
 		, rcx(nullptr)
 		, rdx(nullptr)
 		, rbp(nullptr)
@@ -85,6 +97,8 @@ struct x86_ctx {
 		, r13(nullptr)
 		, r14(nullptr)
 		, r15(nullptr)
+		
+		, rflags(nullptr)
 
 		, xmm0(nullptr)
 		, xmm1(nullptr)
@@ -104,6 +118,9 @@ struct x86_ctx {
 		, xmm15(nullptr)
 
 		, EShadowStackPTR(nullptr)
+		//, ShadowStackPTR(&ShadowStack)
+		//, ShadowStackPTR(nullptr)
+		//, memory(nullptr)
 
 		, of(nullptr)
 		, zf(nullptr)
@@ -138,6 +155,10 @@ void translate_push(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zy
 
 void translate_pop(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
 
+void translate_popfq(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
+
+void translate_pushfq(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
+
 z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op);
 //Prototypes
 
@@ -148,14 +169,10 @@ int main()
 	ZyanU64 runtime_address = 0x1000;
 
 	std::vector<ZyanU8> data = {
-		0x50, //PUSH RAX
-		0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00, //MOV RAX, 0x1
-		0x48, 0xC7, 0xC0, 0x02, 0x00, 0x00, 0x00, //MOV RAX, 0x2
-		0x48, 0xC7, 0xC3, 0x02, 0x00, 0x00, 0x00, //MOV RBX, 0x2
-		0x48, 0x01, 0xD8, //ADD RAX, RBX
-		//0x58, // POP RAX
-		0x48, 0x8B, 0x04, 0x24, //MOV RAX, QWORD PTR SS:[RSP]
-		0x48, 0x83, 0xC4, 0x08, //ADD RSP, 0x8
+		0xB0, 0x02,// MOV AL, 0x2
+		0xB0, 0x01,// MOV AL, 0x1
+		0xB3, 0x01,// MOV BL, 0x1
+		0x00, 0xD8// ADD AL, BL
 	};
 
 	int Counter = 0;
@@ -173,7 +190,7 @@ int main()
 
 	return 0;
 };
-//Func for disasm
+
 Struct_Of_Dissamble_Function Dissamble(ZyanU64 runtime_address, ZyanUSize offset, std::vector<ZyanU8> data, const ZyanUSize length, Struct_Of_Dissamble_Function SODF)
 {
 	while (ZYAN_SUCCESS(ZydisDisassembleIntel(ZYDIS_MACHINE_MODE_LONG_64, runtime_address, &data[0] + offset, length - offset,
@@ -191,7 +208,6 @@ Struct_Of_Dissamble_Function Dissamble(ZyanU64 runtime_address, ZyanUSize offset
 	return (SODF);
 };
 
-//Start of PoC about eleminate_dead_code via Z3 and Zydis
 void eleminate_dead_code(Struct_Of_Dissamble_Function& SODF, const ZyanUSize length)
 {
 	bool eliminated; 
@@ -249,7 +265,9 @@ void translate_instructions(z3::context& z3c, x86_ctx& state, Struct_Of_Dissambl
 void create_initial_state(z3::context& z3c, x86_ctx& ctx)
 {
 	ctx.rax = new z3::expr(z3c.bv_const("init_rax", 64));
+	ctx.al = new z3::expr(z3c.bv_const("init_al", 8));
 	ctx.rbx = new z3::expr(z3c.bv_const("init_rbx", 64));
+	ctx.bl = new z3::expr(z3c.bv_const("init_bl", 8));
 	ctx.rcx = new z3::expr(z3c.bv_const("init_rcx", 64));
 	ctx.rdx = new z3::expr(z3c.bv_const("init_rdx", 64));
 	ctx.rbp = new z3::expr(z3c.bv_const("init_rbp", 64));
@@ -264,6 +282,8 @@ void create_initial_state(z3::context& z3c, x86_ctx& ctx)
 	ctx.r13 = new z3::expr(z3c.bv_const("init_r13", 64));
 	ctx.r14 = new z3::expr(z3c.bv_const("init_r14", 64));
 	ctx.r15 = new z3::expr(z3c.bv_const("init_r15", 64));
+
+	ctx.rflags = new z3::expr(z3c.bv_const("init_rflags", 64));
 
 	ctx.xmm0 = new z3::expr(z3c.bv_const("init_xmm0", 128));
 	ctx.xmm1 = new z3::expr(z3c.bv_const("init_xmm1", 128));
@@ -295,7 +315,9 @@ void create_initial_state(z3::context& z3c, x86_ctx& ctx)
 void copy_changed_state(x86_ctx& old_state, x86_ctx& new_state)
 {
 	check_and_copy(rax);
+	check_and_copy(al);
 	check_and_copy(rbx);
+	check_and_copy(bl);
 	check_and_copy(rcx);
 	check_and_copy(rdx);
 	check_and_copy(rbp);
@@ -310,6 +332,8 @@ void copy_changed_state(x86_ctx& old_state, x86_ctx& new_state)
 	check_and_copy(r13);
 	check_and_copy(r14);
 	check_and_copy(r15);
+
+	check_and_copy(rflags);
 
 	check_and_copy(xmm0);
 	check_and_copy(xmm1);
@@ -357,6 +381,10 @@ void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, 
 	{
 		translate_push(z3c, state, new_state, ins);
 	}
+	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_PUSHFQ)
+	{
+		translate_pushfq(z3c, state, new_state, ins);
+	}
 	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_POP)
 	{
 		translate_pop(z3c, state, new_state, ins);
@@ -375,7 +403,7 @@ void translate_mov(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
 
-		z3::expr& e2 = **get_val_expr(z3c, old_state, op2);
+		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
 		z3::expr** dst = get_val_expr(z3c, new_state, op1);
 
 		*dst = new z3::expr(z3c, e2);
@@ -388,6 +416,7 @@ void translate_add(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 {
 	if (ins.info.operand_count == 3)
 	{
+		int a;
 		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
 
@@ -395,6 +424,7 @@ void translate_add(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
 		z3::expr** dst = get_val_expr(z3c, new_state, op1);
 
+		
 		*dst = new z3::expr(z3c, e1 + e2);
 
 		new_state.cf = &((e1 + e2) < e1);
@@ -464,46 +494,73 @@ void translate_lea(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 		throw std::exception("bad operand count");
 }
 
+
 void translate_push(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
 {
-	if (ins.info.operand_count == 3)
+	if (ins.info.operand_count_visible == 1)
 	{
 		auto& op1 = ins.operands[0]; auto& op2 = ins.operands[1];
 
 		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
-		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
-		z3::expr** dst = get_val_expr(z3c, new_state, op1);
+
+		//new_state.rsp = &(*old_state.rsp - op1.size / 8);
+		
+		new_state.rsp = &(*old_state.rsp - 8);
+		z3::expr** dst = get_val_expr(z3c, new_state, op2);
 
 		*dst = new z3::expr(z3c, e1);
-
-		new_state.rsp = &(e2 - 8);
-		new_state.EShadowStackPTR = &(**dst);
 	}
 	else
-	{
 		throw std::exception("bad operand count");
-	}
 }
 
 void translate_pop(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
 {
-	if (ins.info.operand_count == 3)
+	if (ins.info.operand_count_visible == 1)
 	{
-		auto& op1 = ins.operands[0]; auto& op2 = ins.operands[1];
+		auto& op1 = ins.operands[0];
 
-		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
-		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
 		z3::expr** dst = get_val_expr(z3c, new_state, op1);
 
-		*dst = new z3::expr(z3c, e1);
+		*dst = new z3::expr(z3c, *old_state.rsp);
 
-		new_state.rsp = &(e2 + 8);
-		new_state.EShadowStackPTR = &(**dst);
+		//new_state.rsp = &(*old_state.rsp + op1.size / 8);
+		new_state.rsp = &(*old_state.rsp + 8);
 	}
 	else
-	{
 		throw std::exception("bad operand count");
+}
+
+void translate_popfq(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
+{
+	if (ins.info.operand_count_visible == 0)
+	{
+		auto& op1 = ins.operands[0];
+
+		z3::expr** dst = get_val_expr(z3c, new_state, op1);
+
+		*dst = new z3::expr(z3c, *old_state.rflags);
+
+		new_state.rsp = &(*old_state.rsp + 8);
 	}
+	else
+		throw std::exception("bad operand count");
+}
+
+
+void translate_pushfq(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
+{
+	if (ins.info.operand_count_visible == 0)
+	{
+		auto& op1 = ins.operands[0];
+
+		new_state.rsp = &(*old_state.rsp - 8);
+		z3::expr** dst = get_val_expr(z3c, new_state, op1);
+
+		*dst = new z3::expr(z3c, *old_state.rflags);
+	}
+	else
+		throw std::exception("bad operand count");
 }
 
 z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op)
@@ -514,38 +571,90 @@ z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op
 
 		switch (op.reg.value)
 		{
-		case ZYDIS_REGISTER_RAX: 
-			return ret = &state.rax;
-		case ZYDIS_REGISTER_RBX: 
-			return ret = &state.rbx;
-		case ZYDIS_REGISTER_RCX: 
-			return ret = &state.rcx;
-		case ZYDIS_REGISTER_RDX: 
-			return ret = &state.rdx;
-		case ZYDIS_REGISTER_RBP:
-			return ret = &state.rbp;
-		case ZYDIS_REGISTER_RSP:
-			return ret = &state.rsp;
-		case ZYDIS_REGISTER_RSI: 
-			return ret = &state.rsi;
-		case ZYDIS_REGISTER_RDI:
-			return ret = &state.rdi;
-		case ZYDIS_REGISTER_R8:
-			return ret = &state.r8;
-		case ZYDIS_REGISTER_R9:
-			return ret = &state.r9;
-		case ZYDIS_REGISTER_R10:
-			return ret = &state.r10;
-		case ZYDIS_REGISTER_R11:
-			return ret = &state.r11;
-		case ZYDIS_REGISTER_R12:
-			return ret = &state.r12;
-		case ZYDIS_REGISTER_R13:
-			return ret = &state.r13;
-		case ZYDIS_REGISTER_R14:
-			return ret = &state.r14;
-		case ZYDIS_REGISTER_R15:
-			return ret = &state.r15;
+		case ZYDIS_REGISTER_RAX: return ret = &state.rax;
+		case ZYDIS_REGISTER_EAX: return ret = &state.rax;
+		case ZYDIS_REGISTER_AX: return ret = &state.rax;
+		case ZYDIS_REGISTER_AH: return ret = &state.rax;
+		case ZYDIS_REGISTER_AL: return ret = &state.rax;
+
+		case ZYDIS_REGISTER_RBX: return ret = &state.rbx;
+		case ZYDIS_REGISTER_EBX: return ret = &state.rbx;
+		case ZYDIS_REGISTER_BX: return ret = &state.rbx;
+		case ZYDIS_REGISTER_BH: return ret = &state.rbx;
+		case ZYDIS_REGISTER_BL: return ret = &state.rbx;
+
+		case ZYDIS_REGISTER_RCX: return ret = &state.rcx;
+		case ZYDIS_REGISTER_ECX: return ret = &state.rcx;
+		case ZYDIS_REGISTER_CX: return ret = &state.rcx;
+		case ZYDIS_REGISTER_CH: return ret = &state.rcx;
+		case ZYDIS_REGISTER_CL: return ret = &state.rcx;
+
+		case ZYDIS_REGISTER_RDX: return ret = &state.rdx;
+		case ZYDIS_REGISTER_EDX: return ret = &state.rdx;
+		case ZYDIS_REGISTER_DX: return ret = &state.rdx;
+		case ZYDIS_REGISTER_DH: return ret = &state.rdx;
+		case ZYDIS_REGISTER_DL: return ret = &state.rdx;
+
+		case ZYDIS_REGISTER_RBP: return ret = &state.rbp;
+		case ZYDIS_REGISTER_EBP: return ret = &state.rbp;
+		case ZYDIS_REGISTER_BP: return ret = &state.rbp;
+		case ZYDIS_REGISTER_BPL: return ret = &state.rbp;
+
+		case ZYDIS_REGISTER_RSP: return ret = &state.rsp;
+		case ZYDIS_REGISTER_ESP: return ret = &state.rsp;
+		case ZYDIS_REGISTER_SP: return ret = &state.rsp;
+		case ZYDIS_REGISTER_SPL: return ret = &state.rsp;
+
+		case ZYDIS_REGISTER_RSI: return ret = &state.rsi;
+		case ZYDIS_REGISTER_ESI: return ret = &state.rsi;
+		case ZYDIS_REGISTER_SI: return ret = &state.rsi;
+		case ZYDIS_REGISTER_SIL: return ret = &state.rsi;
+
+		case ZYDIS_REGISTER_RDI: return ret = &state.rdi;
+		case ZYDIS_REGISTER_EDI: return ret = &state.rdi;
+		case ZYDIS_REGISTER_DI: return ret = &state.rdi;
+		case ZYDIS_REGISTER_DIL: return ret = &state.rdi;
+
+		case ZYDIS_REGISTER_R8: return ret = &state.r8;
+		case ZYDIS_REGISTER_R8D: return ret = &state.r8;
+		case ZYDIS_REGISTER_R8W: return ret = &state.r8;
+		case ZYDIS_REGISTER_R8B: return ret = &state.r8;
+
+		case ZYDIS_REGISTER_R9: return ret = &state.r9;
+		case ZYDIS_REGISTER_R9D: return ret = &state.r9;
+		case ZYDIS_REGISTER_R9W: return ret = &state.r9;
+		case ZYDIS_REGISTER_R9B: return ret = &state.r9;
+
+		case ZYDIS_REGISTER_R10: return ret = &state.r10;
+		case ZYDIS_REGISTER_R10D: return ret = &state.r10;
+		case ZYDIS_REGISTER_R10W: return ret = &state.r10;
+		case ZYDIS_REGISTER_R10B: return ret = &state.r10;
+
+		case ZYDIS_REGISTER_R11: return ret = &state.r11;
+		case ZYDIS_REGISTER_R11D: return ret = &state.r11;
+		case ZYDIS_REGISTER_R11W: return ret = &state.r11;
+		case ZYDIS_REGISTER_R11B: return ret = &state.r11;
+
+		case ZYDIS_REGISTER_R12: return ret = &state.r12;
+		case ZYDIS_REGISTER_R12D: return ret = &state.r12;
+		case ZYDIS_REGISTER_R12W: return ret = &state.r12;
+		case ZYDIS_REGISTER_R12B: return ret = &state.r12;
+
+		case ZYDIS_REGISTER_R13: return ret = &state.r13;
+		case ZYDIS_REGISTER_R13D: return ret = &state.r13;
+		case ZYDIS_REGISTER_R13W: return ret = &state.r13;
+		case ZYDIS_REGISTER_R13B: return ret = &state.r13;
+
+		case ZYDIS_REGISTER_R14: return ret = &state.r14;
+		case ZYDIS_REGISTER_R14D: return ret = &state.r14;
+		case ZYDIS_REGISTER_R14W: return ret = &state.r14;
+		case ZYDIS_REGISTER_R14B: return ret = &state.r14;
+
+		case ZYDIS_REGISTER_R15: return ret = &state.r15;
+		case ZYDIS_REGISTER_R15D: return ret = &state.r15;
+		case ZYDIS_REGISTER_R15W: return ret = &state.r15;
+		case ZYDIS_REGISTER_R15B: return ret = &state.r15;
+
 		default:
 			throw std::exception("bad register");
 		}
@@ -562,54 +671,90 @@ z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op
 
 		switch (op.mem.base)
 		{
-		case ZYDIS_REGISTER_RAX:
-			ret = &state.rax;
-			break;
-		case ZYDIS_REGISTER_RBX:
-			ret = &state.rbx;
-			break;
-		case ZYDIS_REGISTER_RCX:
-			ret = &state.rcx;
-			break;
-		case ZYDIS_REGISTER_RDX:
-			ret = &state.rdx;
-			break;
-		case ZYDIS_REGISTER_RBP:
-			ret = &state.rbp;
-			break;
-		case ZYDIS_REGISTER_RSP:
-			ret = &state.rsp;
-			break;
-		case ZYDIS_REGISTER_RSI:
-			ret = &state.rsi;
-			break;
-		case ZYDIS_REGISTER_RDI:
-			ret = &state.rdi;
-			break;
-		case ZYDIS_REGISTER_R8:
-			ret = &state.r8;
-			break;
-		case ZYDIS_REGISTER_R9:
-			ret = &state.r9;
-			break;
-		case ZYDIS_REGISTER_R10:
-			ret = &state.r10;
-			break;
-		case ZYDIS_REGISTER_R11:
-			ret = &state.r11;
-			break;
-		case ZYDIS_REGISTER_R12:
-			ret = &state.r12;
-			break;
-		case ZYDIS_REGISTER_R13:
-			ret = &state.r13;
-			break;
-		case ZYDIS_REGISTER_R14:
-			ret = &state.r14;
-			break;
-		case ZYDIS_REGISTER_R15:
-			ret = &state.r15;
-			break;
+		case ZYDIS_REGISTER_RAX: ret = &state.rax; break;
+		case ZYDIS_REGISTER_EAX: ret = &state.rax; break;
+		case ZYDIS_REGISTER_AX: ret = &state.rax; break;
+		case ZYDIS_REGISTER_AH: ret = &state.rax; break;
+		case ZYDIS_REGISTER_AL: ret = &state.rax; break;
+
+		case ZYDIS_REGISTER_RBX: ret = &state.rbx; break;
+		case ZYDIS_REGISTER_EBX: ret = &state.rbx; break;
+		case ZYDIS_REGISTER_BX: ret = &state.rbx; break;
+		case ZYDIS_REGISTER_BH: ret = &state.rbx; break;
+		case ZYDIS_REGISTER_BL: ret = &state.rbx; break;
+
+		case ZYDIS_REGISTER_RCX: ret = &state.rcx; break;
+		case ZYDIS_REGISTER_ECX: ret = &state.rcx; break;
+		case ZYDIS_REGISTER_CX: ret = &state.rcx; break;
+		case ZYDIS_REGISTER_CH: ret = &state.rcx; break;
+		case ZYDIS_REGISTER_CL: ret = &state.rcx; break;
+
+		case ZYDIS_REGISTER_RDX: ret = &state.rdx; break;
+		case ZYDIS_REGISTER_EDX: ret = &state.rdx; break;
+		case ZYDIS_REGISTER_DX: ret = &state.rdx; break;
+		case ZYDIS_REGISTER_DH: ret = &state.rdx; break;
+		case ZYDIS_REGISTER_DL: ret = &state.rdx; break;
+
+		case ZYDIS_REGISTER_RBP: ret = &state.rbp; break;
+		case ZYDIS_REGISTER_EBP: ret = &state.rbp; break;
+		case ZYDIS_REGISTER_BP: ret = &state.rbp; break;
+		case ZYDIS_REGISTER_BPL: ret = &state.rbp; break;
+
+		case ZYDIS_REGISTER_RSP: ret = &state.rsp; break;
+		case ZYDIS_REGISTER_ESP: ret = &state.rsp; break;
+		case ZYDIS_REGISTER_SP: ret = &state.rsp; break;
+		case ZYDIS_REGISTER_SPL: ret = &state.rsp; break;
+
+		case ZYDIS_REGISTER_RSI: ret = &state.rsi; break;
+		case ZYDIS_REGISTER_ESI: ret = &state.rsi; break;
+		case ZYDIS_REGISTER_SI: ret = &state.rsi; break;
+		case ZYDIS_REGISTER_SIL: ret = &state.rsi; break;
+
+		case ZYDIS_REGISTER_RDI: ret = &state.rdi; break;
+		case ZYDIS_REGISTER_EDI: ret = &state.rdi; break;
+		case ZYDIS_REGISTER_DI: ret = &state.rdi; break;
+		case ZYDIS_REGISTER_DIL: ret = &state.rdi; break;
+
+		case ZYDIS_REGISTER_R8: ret = &state.r8; break;
+		case ZYDIS_REGISTER_R8D: ret = &state.r8; break;
+		case ZYDIS_REGISTER_R8W: ret = &state.r8; break;
+		case ZYDIS_REGISTER_R8B: ret = &state.r8; break;
+
+		case ZYDIS_REGISTER_R9: ret = &state.r9; break;
+		case ZYDIS_REGISTER_R9D: ret = &state.r9; break;
+		case ZYDIS_REGISTER_R9W: ret = &state.r9; break;
+		case ZYDIS_REGISTER_R9B: ret = &state.r9; break;
+
+		case ZYDIS_REGISTER_R10: ret = &state.r10; break;
+		case ZYDIS_REGISTER_R10D: ret = &state.r10; break;
+		case ZYDIS_REGISTER_R10W: ret = &state.r10; break;
+		case ZYDIS_REGISTER_R10B: ret = &state.r10; break;
+
+		case ZYDIS_REGISTER_R11: ret = &state.r11; break;
+		case ZYDIS_REGISTER_R11D: ret = &state.r11; break;
+		case ZYDIS_REGISTER_R11W: ret = &state.r11; break;
+		case ZYDIS_REGISTER_R11B: ret = &state.r11; break;
+
+		case ZYDIS_REGISTER_R12: ret = &state.r12; break;
+		case ZYDIS_REGISTER_R12D: ret = &state.r12; break;
+		case ZYDIS_REGISTER_R12W: ret = &state.r12; break;
+		case ZYDIS_REGISTER_R12B: ret = &state.r12; break;
+
+		case ZYDIS_REGISTER_R13: ret = &state.r13; break;
+		case ZYDIS_REGISTER_R13D: ret = &state.r13; break;
+		case ZYDIS_REGISTER_R13W: ret = &state.r13; break;
+		case ZYDIS_REGISTER_R13B: ret = &state.r13; break;
+
+		case ZYDIS_REGISTER_R14: ret = &state.r14; break;
+		case ZYDIS_REGISTER_R14D: ret = &state.r14; break;
+		case ZYDIS_REGISTER_R14W: ret = &state.r14; break;
+		case ZYDIS_REGISTER_R14B: ret = &state.r14; break;
+
+		case ZYDIS_REGISTER_R15: ret = &state.r15; break;
+		case ZYDIS_REGISTER_R15D: ret = &state.r15; break;
+		case ZYDIS_REGISTER_R15W: ret = &state.r15; break;
+		case ZYDIS_REGISTER_R15B: ret = &state.r15; break;
+
 		default:
 			throw std::exception("bad register");
 		}
@@ -625,12 +770,89 @@ z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op
 				switch (op.mem.index)
 				{
 				case ZYDIS_REGISTER_RAX: index_expr = state.rax; break;
+				case ZYDIS_REGISTER_EAX: index_expr = state.rax; break;
+				case ZYDIS_REGISTER_AX: index_expr = state.rax; break;
+				case ZYDIS_REGISTER_AH: index_expr = state.rax; break;
+				case ZYDIS_REGISTER_AL: index_expr = state.rax; break;
+
 				case ZYDIS_REGISTER_RBX: index_expr = state.rbx; break;
+				case ZYDIS_REGISTER_EBX: index_expr = state.rbx; break;
+				case ZYDIS_REGISTER_BX: index_expr = state.rbx; break;
+				case ZYDIS_REGISTER_BH: index_expr = state.rbx; break;
+				case ZYDIS_REGISTER_BL: index_expr = state.rbx; break;
+
 				case ZYDIS_REGISTER_RCX: index_expr = state.rcx; break;
+				case ZYDIS_REGISTER_ECX: index_expr = state.rcx; break;
+				case ZYDIS_REGISTER_CX: index_expr = state.rcx; break;
+				case ZYDIS_REGISTER_CH: index_expr = state.rcx; break;
+				case ZYDIS_REGISTER_CL: index_expr = state.rcx; break;
+
 				case ZYDIS_REGISTER_RDX: index_expr = state.rdx; break;
-				case ZYDIS_REGISTER_RSI: index_expr = state.rsi; break;
-				case ZYDIS_REGISTER_RDI: index_expr = state.rdi; break;
+				case ZYDIS_REGISTER_EDX: index_expr = state.rdx; break;
+				case ZYDIS_REGISTER_DX: index_expr = state.rdx; break;
+				case ZYDIS_REGISTER_DH: index_expr = state.rdx; break;
+				case ZYDIS_REGISTER_DL: index_expr = state.rdx; break;
+
 				case ZYDIS_REGISTER_RBP: index_expr = state.rbp; break;
+				case ZYDIS_REGISTER_EBP: index_expr = state.rbp; break;
+				case ZYDIS_REGISTER_BP: index_expr = state.rbp; break;
+				case ZYDIS_REGISTER_BPL: index_expr = state.rbp; break;
+
+				case ZYDIS_REGISTER_RSP: index_expr = state.rsp; break;
+				case ZYDIS_REGISTER_ESP: index_expr = state.rsp; break;
+				case ZYDIS_REGISTER_SP: index_expr = state.rsp; break;
+				case ZYDIS_REGISTER_SPL: index_expr = state.rsp; break;
+
+				case ZYDIS_REGISTER_RSI: index_expr = state.rsi; break;
+				case ZYDIS_REGISTER_ESI: index_expr = state.rsi; break;
+				case ZYDIS_REGISTER_SI: index_expr = state.rsi; break;
+				case ZYDIS_REGISTER_SIL: index_expr = state.rsi; break; 
+
+				case ZYDIS_REGISTER_RDI: index_expr = state.rdi; break;
+				case ZYDIS_REGISTER_EDI: index_expr = state.rdi; break;
+				case ZYDIS_REGISTER_DI: index_expr = state.rdi; break;
+				case ZYDIS_REGISTER_DIL: index_expr = state.rdi; break;
+
+				case ZYDIS_REGISTER_R8: index_expr = state.r8; break;
+				case ZYDIS_REGISTER_R8D: index_expr = state.r8; break;
+				case ZYDIS_REGISTER_R8W: index_expr = state.r8; break;
+				case ZYDIS_REGISTER_R8B: index_expr = state.r8; break;
+
+				case ZYDIS_REGISTER_R9: index_expr = state.r9; break;
+				case ZYDIS_REGISTER_R9D: index_expr = state.r9; break;
+				case ZYDIS_REGISTER_R9W: index_expr = state.r9; break;
+				case ZYDIS_REGISTER_R9B: index_expr = state.r9; break;
+
+				case ZYDIS_REGISTER_R10: index_expr = state.r10; break;
+				case ZYDIS_REGISTER_R10D: index_expr = state.r10; break;
+				case ZYDIS_REGISTER_R10W: index_expr = state.r10; break;
+				case ZYDIS_REGISTER_R10B: index_expr = state.r10; break;
+
+				case ZYDIS_REGISTER_R11: index_expr = state.r11; break;
+				case ZYDIS_REGISTER_R11D: index_expr = state.r11; break;
+				case ZYDIS_REGISTER_R11W: index_expr = state.r11; break;
+				case ZYDIS_REGISTER_R11B: index_expr = state.r11; break;
+
+				case ZYDIS_REGISTER_R12: index_expr = state.r12; break;
+				case ZYDIS_REGISTER_R12D: index_expr = state.r12; break;
+				case ZYDIS_REGISTER_R12W: index_expr = state.r12; break;
+				case ZYDIS_REGISTER_R12B: index_expr = state.r12; break;
+
+				case ZYDIS_REGISTER_R13: index_expr = state.r13; break;
+				case ZYDIS_REGISTER_R13D: index_expr = state.r13; break;
+				case ZYDIS_REGISTER_R13W: index_expr = state.r13; break;
+				case ZYDIS_REGISTER_R13B: index_expr = state.r13; break;
+
+				case ZYDIS_REGISTER_R14: index_expr = state.r14; break;
+				case ZYDIS_REGISTER_R14D: index_expr = state.r14; break;
+				case ZYDIS_REGISTER_R14W: index_expr = state.r14; break;
+				case ZYDIS_REGISTER_R14B: index_expr = state.r14; break;
+
+				case ZYDIS_REGISTER_R15: index_expr = state.r15; break;
+				case ZYDIS_REGISTER_R15D: index_expr = state.r15; break;
+				case ZYDIS_REGISTER_R15W: index_expr = state.r15; break;
+				case ZYDIS_REGISTER_R15B: index_expr = state.r15; break;
+
 				default:
 					throw std::exception("bad register");
 				}
