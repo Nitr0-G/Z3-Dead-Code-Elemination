@@ -434,7 +434,7 @@ void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, 
 	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_JZ)
 	{
 
-		//translate_jz(z3c, state, new_state, ins);
+		translate_jz(z3c, state, new_state, ins);
 	}
 	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_SUB)
 	{
@@ -510,7 +510,7 @@ void translate_jz(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zydi
 
 		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
 
-		if (old_state.zf != 0)
+		if (old_state.zf != &z3c.bool_val(0))
 		{
 			new_state.rip = &e1;
 		}
@@ -545,21 +545,18 @@ void translate_cmp(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 {
 	if (ins.info.operand_count_visible == 2)
 	{
-		auto& op1 = ins.operands[0]; auto& op3 = ins.operands[2];
+		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
 
 		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
 		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
-		z3::expr** dst = get_val_expr(z3c, new_state, op3);
-
-		*dst = new z3::expr(z3c, *old_state.rflags);
 
 		z3::expr* cmp = new z3::expr(e1 - e2);
 
 		new_state.cf = &((e1 - e2) < 0);
-		new_state.of = &(((e1 ^ e2) & 0x7FFFFFFF) != 0 && ((e1 ^ **dst) & 0x7FFFFFFF) != 0);
-		new_state.zf = &(**dst == 0);
-		new_state.sf = &(**dst < 0);
+		new_state.of = &(((e1 ^ e2) & 0x7FFFFFFF) != 0 && ((e1 ^ *cmp) & 0x7FFFFFFF) != 0);
+		new_state.zf = &(*cmp == 0);
+		new_state.sf = &(*cmp < 0);
 	}
 	else
 		throw std::exception("bad operand count");
