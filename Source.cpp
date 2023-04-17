@@ -24,6 +24,20 @@ struct Struct_Of_Dissamble_Function {
 	int Counter;
 };
 
+enum flag_t
+{
+	FLAG_OF,
+	FLAG_ZF,
+	FLAG_SF
+};
+
+enum opaque_predicate_t
+{
+	not_opaque_predicate_k,
+	opaque_predicate_taken_k,
+	opaque_predicate_not_taken_k
+};
+
 struct x86_ctx {
 	z3::expr* rax;
 	z3::expr* al;
@@ -44,6 +58,7 @@ struct x86_ctx {
 	z3::expr* r14;
 	z3::expr* r15;
 
+	z3::expr* rip;
 	z3::expr* rflags;
 
 	z3::expr* xmm0;
@@ -98,6 +113,7 @@ struct x86_ctx {
 		, r14(nullptr)
 		, r15(nullptr)
 		
+		, rip(nullptr)
 		, rflags(nullptr)
 
 		, xmm0(nullptr)
@@ -149,7 +165,11 @@ void translate_mov(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 
 void translate_add(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
 
+void translate_jz(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
+
 void translate_sub(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
+
+void translate_cmp(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
 
 void translate_push(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
 
@@ -169,10 +189,39 @@ int main()
 	ZyanU64 runtime_address = 0x1000;
 
 	std::vector<ZyanU8> data = {
-		0xB0, 0x02,// MOV AL, 0x2
-		0xB0, 0x01,// MOV AL, 0x1
-		0xB3, 0x01,// MOV BL, 0x1
-		0x00, 0xD8// ADD AL, BL
+		0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,//MOV RAX, 0x1
+		0x48, 0xC7, 0xC3, 0x03, 0x00, 0x00, 0x00,// MOV RBX, 0x1
+		0x48, 0x83, 0xFB, 0x04,//CMP RBX, 0x2
+		0x74, 0x03, //JE 0x00000000018DDE35
+		0x48, 0x01, 0xC3,//ADD RAX, RBX
+		0x48, 0x29, 0xD8,//SUB RAX, RBX
+
+		//0xB0, 0x02,// MOV AL, 0x2
+		//0xB0, 0x01,// MOV AL, 0x1
+		//0xB3, 0x01,// MOV BL, 0x1
+		//0x00, 0xD8// ADD AL,   BL
+
+		//0x55,//PUSH RBP
+		//0x9C,//PUSHFQ
+		//0x48, 0xBD, 0x06, 0xA8, 0x2F, 0xC8, 0x3C, 0x9A, 0x2C, 0xDC,//MOV RBP, 0xDC2C9A3CC82FA806
+		//0x48, 0x83, 0xC5, 0x02,//ADD RBP, 0x2
+		//0x41, 0x56, //PUSH R14
+		//0x81, 0xFD, 0x8C, 0x42, 0x1D, 0xE2,//CMP EBP, 0xE21D428C
+		//0x48, 0x8B, 0x2C, 0x24,//MOV RBP, QWORD PTR SS:[RSP]
+		//0x48, 0x8B, 0x6C, 0x24, 0x10,//MOV RBP, QWORD PTR SS:[RSP+0x10]
+		//0x48, 0xC7, 0x44, 0x24, 0x10, 0x00, 0x98, 0x53, 0x6D,//MOV QWORD PTR SS:[RSP+0x10], 0x6D539800
+		//0xFF, 0x74, 0x24, 0x08,//PUSH QWORD PTR SS:[RSP+0x8]
+		//0x9D//POPFQ
+
+		//0x48, 0x01, 0xD8, //ADD RAX, RBX
+		//0x50, //PUSH RAX
+		//0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00, //MOV RAX, 0x1
+		//0x48, 0xC7, 0xC0, 0x02, 0x00, 0x00, 0x00, //MOV RAX, 0x2
+		//0x48, 0xC7, 0xC3, 0x02, 0x00, 0x00, 0x00, //MOV RBX, 0x2
+		//0x48, 0x01, 0xD8, //ADD RAX, RBX
+		////0x58, // POP RAX
+		//0x48, 0x8B, 0x04, 0x24, //MOV RAX, QWORD PTR SS:[RSP]
+		//0x48, 0x83, 0xEC, 0x08, //SUB RSP, 0x8
 	};
 
 	int Counter = 0;
@@ -196,11 +245,13 @@ Struct_Of_Dissamble_Function Dissamble(ZyanU64 runtime_address, ZyanUSize offset
 	while (ZYAN_SUCCESS(ZydisDisassembleIntel(ZYDIS_MACHINE_MODE_LONG_64, runtime_address, &data[0] + offset, length - offset,
 		&SODF.instr)))
 	{
-		offset += SODF.instr.info.length;
-
 		std::cout << "Disassembled: " << SODF.instr.text << "\n";
 
-		SODF.optimized_instructions.push_back(SODF.instr);
+		//if (SODF.instr.info.mnemonic != ZYDIS_MNEMONIC_CMP)
+		{
+			SODF.optimized_instructions.push_back(SODF.instr);
+		}
+		offset += SODF.instr.info.length;
 	}
 
 	std::cout << std::endl;
@@ -282,6 +333,7 @@ void create_initial_state(z3::context& z3c, x86_ctx& ctx)
 	ctx.r13 = new z3::expr(z3c.bv_const("init_r13", 64));
 	ctx.r14 = new z3::expr(z3c.bv_const("init_r14", 64));
 	ctx.r15 = new z3::expr(z3c.bv_const("init_r15", 64));
+	ctx.rip = new z3::expr(z3c.bv_const("init_rip", 64));
 
 	ctx.rflags = new z3::expr(z3c.bv_const("init_rflags", 64));
 
@@ -303,6 +355,11 @@ void create_initial_state(z3::context& z3c, x86_ctx& ctx)
 	ctx.xmm15 = new z3::expr(z3c.bv_const("init_xmm15", 128));
 
 	ctx.EShadowStackPTR = new z3::expr(z3c.bv_const("ShadowStack", 64));
+	//ctx.ShadowStack.reserve(0x10000);
+	//ctx.ShadowStack.push_back(z3::expr(z3c.bv_const("ShadowStack", 0x10000)));
+
+	//z3::array<z3::expr*> ShadowStack(z3c.bv_const("init_ShadowStack", 0x10000));
+	//ctx.ShadowStackPTR = &ShadowStack;
 
 	ctx.of = new z3::expr(z3c.bool_const("init_of"));
 	ctx.zf = new z3::expr(z3c.bool_const("init_zf"));
@@ -332,6 +389,7 @@ void copy_changed_state(x86_ctx& old_state, x86_ctx& new_state)
 	check_and_copy(r13);
 	check_and_copy(r14);
 	check_and_copy(r15);
+	check_and_copy(rip);
 
 	check_and_copy(rflags);
 
@@ -373,9 +431,19 @@ void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, 
 	{
 		translate_add(z3c, state, new_state, ins);
 	}
+	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_JZ)
+	{
+
+		//translate_jz(z3c, state, new_state, ins);
+	}
 	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_SUB)
 	{
 		translate_sub(z3c, state, new_state, ins);
+	}
+	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_CMP)
+	{
+		//translate_sub(z3c, state, new_state, ins);
+		translate_cmp(z3c, state, new_state, ins);
 	}
 	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_PUSH)
 	{
@@ -398,7 +466,7 @@ void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, 
 
 void translate_mov(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
 {
-	if (ins.info.operand_count == 2)
+	if (ins.info.operand_count_visible == 2)
 	{
 		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
@@ -414,9 +482,8 @@ void translate_mov(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 
 void translate_add(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
 {
-	if (ins.info.operand_count == 3)
+	if (ins.info.operand_count_visible == 2)
 	{
-		int a;
 		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
 
@@ -424,7 +491,6 @@ void translate_add(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
 		z3::expr** dst = get_val_expr(z3c, new_state, op1);
 
-		
 		*dst = new z3::expr(z3c, e1 + e2);
 
 		new_state.cf = &((e1 + e2) < e1);
@@ -436,9 +502,26 @@ void translate_add(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 		throw std::exception("bad operand count");
 }
 
+void translate_jz(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
+{
+	if (ins.info.operand_count_visible == 1)
+	{
+		auto& op1 = ins.operands[0]; int a = op1.imm.value.u;
+
+		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
+
+		if (old_state.zf != 0)
+		{
+			new_state.rip = &e1;
+		}
+	}
+	else
+		throw std::exception("bad operand count");
+}
+
 void translate_sub(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
 {
-	if (ins.info.operand_count == 3)
+	if (ins.info.operand_count_visible == 2)
 	{
 		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
@@ -458,9 +541,33 @@ void translate_sub(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 		throw std::exception("bad operand count");
 }
 
+void translate_cmp(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
+{
+	if (ins.info.operand_count_visible == 2)
+	{
+		auto& op1 = ins.operands[0]; auto& op3 = ins.operands[2];
+		auto& op2 = ins.operands[1];
+
+		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
+		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
+		z3::expr** dst = get_val_expr(z3c, new_state, op3);
+
+		*dst = new z3::expr(z3c, *old_state.rflags);
+
+		z3::expr* cmp = new z3::expr(e1 - e2);
+
+		new_state.cf = &((e1 - e2) < 0);
+		new_state.of = &(((e1 ^ e2) & 0x7FFFFFFF) != 0 && ((e1 ^ **dst) & 0x7FFFFFFF) != 0);
+		new_state.zf = &(**dst == 0);
+		new_state.sf = &(**dst < 0);
+	}
+	else
+		throw std::exception("bad operand count");
+}
+
 void translate_xor(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
 {
-	if (ins.info.operand_count == 3)
+	if (ins.info.operand_count_visible == 2)
 	{
 		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
@@ -471,6 +578,7 @@ void translate_xor(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 
 		*dst = new z3::expr(z3c, e1 ^ e2);
 
+		new_state.of = new z3::expr(z3c.bool_val(false));
 		new_state.zf = new z3::expr(**dst == 0);
 		new_state.sf = new z3::expr(**dst < 0);
 	}
@@ -480,7 +588,7 @@ void translate_xor(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 
 void translate_lea(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
 {
-	if (ins.info.operand_count == 3)
+	if (ins.info.operand_count_visible == 2)
 	{
 		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
@@ -655,6 +763,8 @@ z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op
 		case ZYDIS_REGISTER_R15W: return ret = &state.r15;
 		case ZYDIS_REGISTER_R15B: return ret = &state.r15;
 
+		case ZYDIS_REGISTER_RFLAGS:  return ret = &state.rflags;
+
 		default:
 			throw std::exception("bad register");
 		}
@@ -664,6 +774,32 @@ z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op
 		state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint64_t>(op.imm.value.u), 64)));
 
 		return &state.temp.back();
+		/*
+		if (op.element_size == 64)
+		{
+			state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint64_t>(op.imm.value.u), 64)));
+
+			return &state.temp.back();
+		}
+		else if (op.element_size == 32)
+		{
+			state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint32_t>(op.imm.value.u), 32)));
+
+			return &state.temp.back();
+		}
+		else if (op.element_size == 16)
+		{
+			state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint16_t>(op.imm.value.u), 16)));
+
+			return &state.temp.back();
+		}
+		else if (op.element_size == 8)
+		{
+			state.temp.push_back(new z3::expr(z3c.bv_val(op.imm.value.u, 8)));
+
+			return &state.temp.back();
+		}
+		*/
 	}
 	else if (op.type == ZYDIS_OPERAND_TYPE_MEMORY)
 	{
