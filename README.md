@@ -1,7 +1,3 @@
 # Z3-Dead-Code-Elemination
-
-1)Unpack /deps/ to Zydis folder
-
-2)Build solution via Cmake
-
-3)Add Z3 .lib && .h to solution 
+1)Build solution via Cmake
+2)Add Z3 .lib && .h to solution 
