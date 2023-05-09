@@ -3,7 +3,7 @@
 //FrameWorks and Libs
 #include <z3++.h> 
 #include <z3_api.h>
-#include <boost/scoped_array.hpp>
+//#include <boost/scoped_array.hpp>
 #include <Zydis/Zydis.h>
 
 //stl
@@ -21,6 +21,7 @@ typedef std::list<ZydisDisassembledInstruction_> instruction_optimize_list;
 struct Struct_Of_Dissamble_Function {
 	ZydisDisassembledInstruction instr;
 	instruction_optimize_list optimized_instructions;
+	std::vector<ZydisDisassembledInstruction_> svInstructions;
 	int Counter;
 };
 
@@ -28,7 +29,8 @@ enum flag_t
 {
 	FLAG_OF,
 	FLAG_ZF,
-	FLAG_SF
+	FLAG_SF,
+	FLAG_CF
 };
 
 enum opaque_predicate_t
@@ -147,7 +149,11 @@ struct x86_ctx {
 
 
 //Prototypes
+size_t conditional_index(Struct_Of_Dissamble_Function& SODF, size_t count);
+
 Struct_Of_Dissamble_Function  Dissamble(ZyanU64 runtime_address, ZyanUSize offset, std::vector<ZyanU8> data, const ZyanUSize length, Struct_Of_Dissamble_Function SODF);
+
+opaque_predicate_t is_opaque_predicate(std::vector<ZydisDisassembledInstruction_>& svInstructions, size_t count);
 
 void eleminate_dead_code(Struct_Of_Dissamble_Function& SODF, const ZyanUSize length);
 
@@ -159,7 +165,7 @@ void create_initial_state(z3::context& z3c, x86_ctx& ctx);
 
 void copy_changed_state(x86_ctx& old_state, x86_ctx& new_state);
 
-void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, x86_ctx& state, Struct_Of_Dissamble_Function SODF);
+void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, x86_ctx& state);
 
 void translate_mov(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
 
@@ -179,7 +185,11 @@ void translate_popfq(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Z
 
 void translate_pushfq(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
 
+void translate_and(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins);
+
 z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op);
+
+opaque_predicate_t test_condition(z3::context& z3c, x86_ctx& state, ZydisDisassembledInstruction_ ins);
 //Prototypes
 
 int main()
@@ -190,8 +200,8 @@ int main()
 
 	std::vector<ZyanU8> data = {
 		0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,//MOV RAX, 0x1
-		0x48, 0xC7, 0xC3, 0x03, 0x00, 0x00, 0x00,// MOV RBX, 0x1
-		0x48, 0x83, 0xFB, 0x04,//CMP RBX, 0x2
+		0x48, 0xC7, 0xC3, 0x04, 0x00, 0x00, 0x00,// MOV RBX, 0x5
+		0x48, 0x83, 0xFB, 0x04,//CMP RBX, 0x4
 		0x74, 0x03, //JE 0x00000000018DDE35
 		0x48, 0x01, 0xC3,//ADD RAX, RBX
 		0x48, 0x29, 0xD8,//SUB RAX, RBX
@@ -230,6 +240,28 @@ int main()
 
     SODF = Dissamble(runtime_address,offset,data,length,SODF);
 
+	size_t jcc_id = conditional_index(SODF, SODF.Counter);
+
+	ZydisDisassembledInstruction_ jcc_ins = SODF.svInstructions[jcc_id];
+
+	std::cout << (jcc_id + 1) << ". instruction is conditional " << std::endl;
+	std::cout << " > testing: " << jcc_ins.text << std::endl;
+
+	auto result = is_opaque_predicate(SODF.svInstructions, jcc_id);
+
+	switch (result)
+	{
+	case not_opaque_predicate_k:
+		std::cout << "not an opaque predicate" << std::endl;
+		break;
+	case opaque_predicate_taken_k:
+		std::cout << "opaque predicate: always taken" << std::endl;
+		break;
+	case opaque_predicate_not_taken_k:
+		std::cout << "opaque predicate: never taken" << std::endl;
+		break;
+	}
+
 	eleminate_dead_code(SODF,length);
 
 	for (ZydisDisassembledInstruction_ ins : SODF.optimized_instructions)
@@ -250,14 +282,49 @@ Struct_Of_Dissamble_Function Dissamble(ZyanU64 runtime_address, ZyanUSize offset
 		//if (SODF.instr.info.mnemonic != ZYDIS_MNEMONIC_CMP)
 		{
 			SODF.optimized_instructions.push_back(SODF.instr);
+			SODF.svInstructions.push_back(SODF.instr);
 		}
 		offset += SODF.instr.info.length;
+		++SODF.Counter;
 	}
 
 	std::cout << std::endl;
 
 	return (SODF);
 };
+
+size_t conditional_index(Struct_Of_Dissamble_Function& SODF, size_t count)
+{
+	for (size_t ins_id = 0; ins_id < count; ins_id++)
+	{
+		switch (SODF.svInstructions[ins_id].info.mnemonic)
+		{
+		case ZYDIS_MNEMONIC_JZ:
+			return ins_id;
+		default:
+			break;
+		}
+	}
+
+	return SIZE_MAX;
+}
+
+opaque_predicate_t is_opaque_predicate(std::vector<ZydisDisassembledInstruction_>& svInstructions, size_t count)
+{
+	x86_ctx     state;
+	z3::context c;
+
+	create_initial_state(c, state);
+
+	for (size_t ins_id = 0; ins_id < count; ins_id++)
+	{
+		auto& ins = svInstructions[ins_id];
+
+		translate_instruction(c, ins, state);
+	}
+
+	return test_condition(c, state, svInstructions[count]);
+}
 
 void eleminate_dead_code(Struct_Of_Dissamble_Function& SODF, const ZyanUSize length)
 {
@@ -308,7 +375,7 @@ void translate_instructions(z3::context& z3c, x86_ctx& state, Struct_Of_Dissambl
 	{
 		if (iter != skip)
 		{
-			translate_instruction(z3c, *iter, state, SODF);
+			translate_instruction(z3c, *iter, state);
 		}
 	}
 };
@@ -419,7 +486,7 @@ void copy_changed_state(x86_ctx& old_state, x86_ctx& new_state)
 
 #undef check_and_copy
 
-void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, x86_ctx& state, Struct_Of_Dissamble_Function SODF)
+void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, x86_ctx& state)
 {
 	x86_ctx new_state;
 
@@ -431,20 +498,26 @@ void translate_instruction(z3::context& z3c, ZydisDisassembledInstruction_ ins, 
 	{
 		translate_add(z3c, state, new_state, ins);
 	}
-	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_JZ)
+	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_AND)
 	{
-
-		translate_jz(z3c, state, new_state, ins);
+		translate_and(z3c, state, new_state, ins);
 	}
+	//else if (ins.info.mnemonic == ZYDIS_MNEMONIC_JZ)
+	//{
+	//
+	//	translate_jz(z3c, state, new_state, ins);
+	//}
 	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_SUB)
 	{
 		translate_sub(z3c, state, new_state, ins);
 	}
+	
 	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_CMP)
 	{
 		//translate_sub(z3c, state, new_state, ins);
-		translate_cmp(z3c, state, new_state, ins);
+		//translate_cmp(z3c, state, new_state, ins);
 	}
+	
 	else if (ins.info.mnemonic == ZYDIS_MNEMONIC_PUSH)
 	{
 		translate_push(z3c, state, new_state, ins);
@@ -506,17 +579,19 @@ void translate_jz(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zydi
 {
 	if (ins.info.operand_count_visible == 1)
 	{
-		auto& op1 = ins.operands[0]; int a = op1.imm.value.u;
+		auto& op1 = ins.operands[0];
 
 		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
 
-		if (old_state.zf != &z3c.bool_val(0))
+		if (old_state.zf)
 		{
 			new_state.rip = &e1;
 		}
 	}
 	else
-		throw std::exception("bad operand count");
+	{
+		throw std::runtime_error("Invalid operand count for JZ instruction");
+	}
 }
 
 void translate_sub(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
@@ -532,10 +607,31 @@ void translate_sub(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 
 		*dst = new z3::expr(z3c, e1 - e2);
 
-		new_state.cf = &((e1 - e2) > e1);
-		new_state.of = &(((e1 ^ e2) & 0x7FFFFFFF) != 0 && ((e1 ^ **dst) & 0x7FFFFFFF) != 0);
+		//new_state.cf = &((e1 - e2) > e1);
+		//new_state.of = &(((e1 ^ e2) & 0x7FFFFFFF) != 0 && ((e1 ^ **dst) & 0x7FFFFFFF) != 0);
 		new_state.zf = &(**dst == 0);
 		new_state.sf = &(**dst < 0);
+	}
+	else
+		throw std::exception("bad operand count");
+}
+
+void translate_and(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, ZydisDisassembledInstruction_ ins)
+{
+	if (ins.info.operand_count_visible == 2)
+	{
+		auto& op1 = ins.operands[0];
+		auto& op2 = ins.operands[1];
+
+		z3::expr& e1 = **get_val_expr(z3c, old_state, op1);
+		z3::expr& e2 = **get_val_expr(z3c, old_state, op2);
+		z3::expr** dst = get_val_expr(z3c, new_state, op1);
+
+		*dst = new z3::expr(z3c, e1 & e2);
+
+		new_state.of = new z3::expr(z3c.bool_val(false));
+		new_state.zf = new z3::expr(**dst == 0);
+		new_state.sf = new z3::expr(**dst < 0);
 	}
 	else
 		throw std::exception("bad operand count");
@@ -548,15 +644,19 @@ void translate_cmp(z3::context& z3c, x86_ctx& old_state, x86_ctx& new_state, Zyd
 		auto& op1 = ins.operands[0];
 		auto& op2 = ins.operands[1];
 
+		//old_state.zf = false;
+
 		z3::expr e1 = **get_val_expr(z3c, old_state, op1);
 		z3::expr e2 = **get_val_expr(z3c, old_state, op2);
+		//z3::expr** dst = get_val_expr(z3c, new_state, op1);
+		//*dst = new z3::expr(z3c, e1);
 
-		z3::expr* cmp = new z3::expr(e1 - e2);
+		z3::expr cmp = z3::expr(e1 - e2);
 
 		new_state.cf = &((e1 - e2) < 0);
-		new_state.of = &(((e1 ^ e2) & 0x7FFFFFFF) != 0 && ((e1 ^ *cmp) & 0x7FFFFFFF) != 0);
-		new_state.zf = &(*cmp == 0);
-		new_state.sf = &(*cmp < 0);
+		new_state.of = &(((e1 ^ e2) & 0x7FFFFFFF) != 0 && ((e1 ^ cmp) & 0x7FFFFFFF) != 0);
+		new_state.zf = &(cmp == 0);
+		new_state.sf = &(cmp < 0);
 	}
 	else
 		throw std::exception("bad operand count");
@@ -771,32 +871,6 @@ z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op
 		state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint64_t>(op.imm.value.u), 64)));
 
 		return &state.temp.back();
-		/*
-		if (op.element_size == 64)
-		{
-			state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint64_t>(op.imm.value.u), 64)));
-
-			return &state.temp.back();
-		}
-		else if (op.element_size == 32)
-		{
-			state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint32_t>(op.imm.value.u), 32)));
-
-			return &state.temp.back();
-		}
-		else if (op.element_size == 16)
-		{
-			state.temp.push_back(new z3::expr(z3c.bv_val(static_cast<uint16_t>(op.imm.value.u), 16)));
-
-			return &state.temp.back();
-		}
-		else if (op.element_size == 8)
-		{
-			state.temp.push_back(new z3::expr(z3c.bv_val(op.imm.value.u, 8)));
-
-			return &state.temp.back();
-		}
-		*/
 	}
 	else if (op.type == ZYDIS_OPERAND_TYPE_MEMORY)
 	{
@@ -1017,3 +1091,116 @@ z3::expr** get_val_expr(z3::context& z3c, x86_ctx& state, ZydisDecodedOperand op
 	else
 		throw std::exception("bad operand type");
 }
+
+z3::expr** get_flag_expr(x86_ctx& state, flag_t flag)
+{
+	z3::expr** ret;
+
+	switch (flag)
+	{
+	case FLAG_OF: ret = &state.of; break;
+	case FLAG_ZF: ret = &state.zf; break;
+	case FLAG_SF: ret = &state.sf; break;
+	default:
+		throw std::exception("bad flag");
+	}
+
+	if (ret)
+		return ret;
+	else
+		throw std::exception("bad state");
+}
+
+opaque_predicate_t test_condition(z3::context& z3c, x86_ctx& state, ZydisDisassembledInstruction_ ins)
+{
+	z3::expr* cc;
+
+	switch (ins.info.mnemonic)
+	{
+	case ZYDIS_MNEMONIC_JO:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_OF));
+		break;
+	case ZYDIS_MNEMONIC_JNO:
+		cc = new z3::expr(!**get_flag_expr(state, FLAG_OF));
+		break;
+	case ZYDIS_MNEMONIC_JZ:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_ZF));
+		break;
+	case ZYDIS_MNEMONIC_JNZ:
+		cc = new z3::expr(!**get_flag_expr(state, FLAG_ZF));
+		break;
+	case ZYDIS_MNEMONIC_JS:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_SF));
+		break;
+	case ZYDIS_MNEMONIC_JNS:
+		cc = new z3::expr(!**get_flag_expr(state, FLAG_SF));
+		break;
+	case ZYDIS_MNEMONIC_JL:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_SF) != **get_flag_expr(state, FLAG_OF));
+		break;
+	case ZYDIS_MNEMONIC_JLE:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_ZF)
+			|| (**get_flag_expr(state, FLAG_SF) != **get_flag_expr(state, FLAG_OF)));
+		break;
+	default:
+		throw std::runtime_error("Invalid jcc instruction");
+	}
+
+	z3::solver s1(z3c);
+	s1.add(*cc);
+	if (s1.check() == z3::unsat) return opaque_predicate_not_taken_k;
+
+	z3::solver s2(z3c);
+	s2.add(!*cc);
+	if (s2.check() == z3::unsat) return opaque_predicate_taken_k;
+
+	return not_opaque_predicate_k;
+}
+
+/*
+opaque_predicate_t test_condition(z3::context& z3c, x86_ctx& state, ZydisDisassembledInstruction_ ins)
+{
+	z3::expr* cc;
+
+	z3::solver s1(z3c);
+	z3::solver s2(z3c);
+
+	switch (ins.info.mnemonic)
+	{
+	case ZYDIS_MNEMONIC_JO:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_OF));
+		break;
+	case ZYDIS_MNEMONIC_JNO:
+		cc = new z3::expr(!**get_flag_expr(state, FLAG_OF));
+		break;
+	case ZYDIS_MNEMONIC_JZ:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_ZF));
+		break;
+	case ZYDIS_MNEMONIC_JNZ:
+		cc = new z3::expr(!**get_flag_expr(state, FLAG_ZF));
+		break;
+	case ZYDIS_MNEMONIC_JS:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_SF));
+		break;
+	case ZYDIS_MNEMONIC_JNS:
+		cc = new z3::expr(!**get_flag_expr(state, FLAG_SF));
+		break;
+	case ZYDIS_MNEMONIC_JL:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_SF) != **get_flag_expr(state, FLAG_OF));
+		break;
+	case ZYDIS_MNEMONIC_JLE:
+		cc = new z3::expr(**get_flag_expr(state, FLAG_ZF)
+			|| **get_flag_expr(state, FLAG_SF) != **get_flag_expr(state, FLAG_OF));
+		break;
+	default:
+		throw std::exception("bad jcc");
+	}
+
+	s1.add(*cc);
+	s2.add(!(*cc));
+
+	if (s1.check() == z3::unsat) return opaque_predicate_not_taken_k;
+	if (s2.check() == z3::unsat) return opaque_predicate_taken_k;
+
+	return not_opaque_predicate_k;
+}*/
